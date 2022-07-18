@@ -56,7 +56,7 @@ fn main() -> Result<()> {
     let mut port = None;
     for out_port in midi_out.ports() {
         println!("{}", midi_out.port_name(&out_port)?);
-	port = Some(out_port);
+        port = Some(out_port);
     }
 
     let port = port.unwrap();
