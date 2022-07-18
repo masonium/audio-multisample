@@ -4,24 +4,22 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{
     BufferSize, Data, Host, OutputCallbackInfo, SampleFormat, SampleRate, StreamConfig, StreamError,
 };
-use midir::{MidiIO, MidiOutput, MidiOutputPort};
-use std::sync::{Arc, Mutex};
+use midir::MidiOutput;
 
+#[allow(unused)]
 fn error_callback(e: StreamError) {
     println!("{:?}", e);
 }
 
+#[allow(unused)]
 fn play_sine(host: &Host) -> Result<()> {
     let output = host.default_output_device().unwrap();
-    let audio_buffer: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
 
     let config = StreamConfig {
         channels: 2,
         sample_rate: SampleRate(44100),
         buffer_size: BufferSize::Default,
     };
-
-    let output_buffer: Arc<Vec<_>> = Arc::new(audio_buffer.lock().unwrap().clone());
 
     let mut ci: usize = 0;
     let freq = 440;
@@ -64,7 +62,7 @@ fn main() -> Result<()> {
     let port = port.unwrap();
     let mut conn = midi_out.connect(&port, "sampler").unwrap();
 
-    let res = capturer.capture_note(&mut conn, 60)?;
+    let _res = capturer.capture_notes(&mut conn)?;
 
     Ok(())
 }
