@@ -11,3 +11,5 @@ cpal = "0.13.5"
 crossbeam = "0.8.1"
 midir = "*"
 thiserror = "*"
+serde = { version = "1", features = ["derive"] }
+toml = "*"

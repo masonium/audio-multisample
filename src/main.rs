@@ -49,7 +49,7 @@ fn play_sine(host: &Host) -> Result<()> {
 fn main() -> Result<()> {
     let host = cpal::default_host();
     let device = host.default_input_device().unwrap();
-
+    
     let capturer = NoteCapturer::new(&device);
     let midi_out = MidiOutput::new("audio_multisample")?;
 

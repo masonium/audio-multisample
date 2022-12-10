@@ -7,6 +7,7 @@ use std::ops::DerefMut;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use thiserror::Error;
+use serde::Deserialize;
 
 use midir::MidiOutputConnection;
 
@@ -30,26 +31,13 @@ pub enum CaptureError {
     MidiSend(#[from] midir::SendError),
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum CaptureChannels {
-    Mono,
-    Stereo,
-}
 
-impl From<CaptureChannels> for u16 {
-    fn from(cc: CaptureChannels) -> Self {
-        match cc {
-            CaptureChannels::Mono => 1,
-            CaptureChannels::Stereo => 2,
-        }
-    }
-}
-
-pub struct NoteCapturer<'d> {
-    device: &'d Device,
-    length_on: Duration,
-    length_release: Duration,
-    channels: CaptureChannels,
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct NoteCaptureSettings {
+    time_on: Duration,
+    time_release: Duration,
+    time_between: Duration,
+    channels: u8,
     sample_rate: usize,
     midi_channel: u8,
     note_on_velocity: u8,
@@ -60,14 +48,18 @@ pub struct NoteCapturer<'d> {
     note_spacing: u8,
 }
 
-impl<'d> NoteCapturer<'d> {
-    /// Return a new note capturer with standard settings.
-    pub fn new(input_device: &Device) -> NoteCapturer {
-        NoteCapturer {
-            device: input_device,
-            length_on: Duration::from_secs_f32(0.02),
-            length_release: Duration::from_secs_f32(0.02),
-            channels: CaptureChannels::Mono,
+pub struct NoteCapturer<'d> {
+    device: &'d Device,
+    settings: NoteCaptureSettings,
+}
+
+impl Default for NoteCaptureSettings {
+    fn default() -> Self {
+	Self {
+            time_on: Duration::from_secs_f32(0.02),
+            time_release: Duration::from_secs_f32(0.02),
+	    time_between: Duration::from_secs_f32(1.0),
+            channels: 1,
             sample_rate: 44100,
             midi_channel: 1,
             note_on_velocity: 64,
@@ -76,14 +68,44 @@ impl<'d> NoteCapturer<'d> {
             first_note: 21,
             last_note: 108,
             note_spacing: 1,
+	}
+    }
+}
+
+impl NoteCaptureSettings {
+    /// Return the buffer size to allocate for the number of samples
+    /// needed to store each note.
+    fn num_samples(&self) -> usize {
+        let num_channels: u16 = self.channels as u16;
+        let total_length_secs: f32 =
+            self.time_on.as_secs_f32() + self.time_release.as_secs_f32() + 0.01;
+        ((self.sample_rate * num_channels as usize) as f32 * total_length_secs) as usize
+    }
+
+    /// Return true iff all settings are valid.
+    fn verify(&self) -> bool {
+	if self.channels < 1 || self. channels > 2 {
+	    return false;
+	}
+
+	true
+    }
+}
+    
+
+impl<'d> NoteCapturer<'d> {
+    /// Return a new note capturer with standard settings.
+    pub fn new(input_device: &Device) -> NoteCapturer {
+        NoteCapturer {
+            device: input_device,
+	    settings: NoteCaptureSettings::default()
         }
     }
 
-    fn num_samples(&self) -> usize {
-        let num_channels: u16 = self.channels.into();
-        let total_length_secs: f32 =
-            self.length_on.as_secs_f32() + self.length_release.as_secs_f32() + 0.01;
-        ((self.sample_rate * num_channels as usize) as f32 * total_length_secs) as usize
+    pub fn apply_config(&mut self, config: &NoteCaptureSettings) {
+	if config.verify() {
+	    self.settings = config.clone();
+	}
     }
 
     /// Return a raw byte array represnting a MIDI Note Off message.
@@ -101,16 +123,22 @@ impl<'d> NoteCapturer<'d> {
         &self,
         midi: &mut MidiOutputConnection,
     ) -> Result<Vec<NoteSample>, CaptureError> {
-        let notes: Vec<u8> = (self.first_note..=self.last_note)
+        let mut notes: Vec<u8> = (self.settings.first_note..=self.settings.last_note)
             .enumerate()
             .filter_map(|(i, n)| {
-                if i as u8 % self.note_spacing == 0 {
+                if i as u8 % self.settings.note_spacing == 0 {
                     Some(n)
                 } else {
                     None
                 }
             })
             .collect();
+
+	if notes.len() > 0 {
+	    if notes[notes.len() - 1] != self.settings.last_note {
+		notes.push(self.settings.last_note);
+	    }
+	}
 
         self.capture_note_list(midi, &notes)
     }
@@ -121,14 +149,14 @@ impl<'d> NoteCapturer<'d> {
         midi: &mut MidiOutputConnection,
         notes: &[u8],
     ) -> Result<Vec<NoteSample>, CaptureError> {
-        let max_size = self.num_samples();
+        let max_size = self.settings.num_samples();
         let buffer: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
 
         let mut note_buffers = Vec::new();
 
         let in_config = StreamConfig {
-            channels: self.channels.into(),
-            sample_rate: SampleRate(self.sample_rate as u32),
+            channels: self.settings.channels.into(),
+            sample_rate: SampleRate(self.settings.sample_rate as u32),
             buffer_size: BufferSize::Default,
         };
 
@@ -168,18 +196,18 @@ impl<'d> NoteCapturer<'d> {
 
             {
                 midi.send(&Self::midi_note_on_message(
-                    self.midi_channel,
+                    self.settings.midi_channel,
                     *note,
-                    self.note_on_velocity,
+                    self.settings.note_on_velocity,
                 ))?;
                 stream.play()?;
-                std::thread::sleep(self.length_on);
+                std::thread::sleep(self.settings.time_on);
                 midi.send(&Self::midi_note_off_message(
-                    self.midi_channel,
+                    self.settings.midi_channel,
                     *note,
-                    self.note_off_velocity,
+                    self.settings.note_off_velocity,
                 ))?;
-                std::thread::sleep(self.length_release);
+                std::thread::sleep(self.settings.time_release);
                 stream.pause()?;
             }
             {
@@ -195,6 +223,7 @@ impl<'d> NoteCapturer<'d> {
             std::mem::swap(raw_buf.deref_mut(), &mut ret_buf);
 
             note_buffers.push(ret_buf);
+	    std::thread::sleep(self.settings.time_between);
         }
 
         Ok(note_buffers)
